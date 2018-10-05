@@ -1,0 +1,62 @@
+<mule xmlns:mulexml="http://www.mulesoft.org/schema/mule/xml" xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns:dw="http://www.mulesoft.org/schema/mule/ee/dw" xmlns:jbossts="http://www.mulesoft.org/schema/mule/jbossts" xmlns:jms="http://www.mulesoft.org/schema/mule/jms" xmlns:file="http://www.mulesoft.org/schema/mule/file" xmlns:db="http://www.mulesoft.org/schema/mule/db"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns:validation="http://www.mulesoft.org/schema/mule/validation"
+	xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/validation http://www.mulesoft.org/schema/mule/validation/current/mule-validation.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd
+http://www.mulesoft.org/schema/mule/jms http://www.mulesoft.org/schema/mule/jms/current/mule-jms.xsd
+http://www.mulesoft.org/schema/mule/jbossts http://www.mulesoft.org/schema/mule/jbossts/current/mule-jbossts.xsd
+http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee/dw/current/dw.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
+http://www.mulesoft.org/schema/mule/xml http://www.mulesoft.org/schema/mule/xml/current/mule-xml.xsd">
+	<http:listener-config name="HTTP_Listener_Configuration" host="0.0.0.0" port="8081" doc:name="HTTP Listener Configuration"/>
+    <db:mysql-config name="MySQL_Configuration" host="localhost" port="3306" user="root" database="cif" doc:name="MySQL Configuration" password="Miracle@1"/>
+    <jms:activemq-connector name="Active_MQ" brokerURL="tcp://localhost:61616" validateConnections="true" doc:name="Active MQ"/>
+	<flow name="validationflowFlow">
+        <file:inbound-endpoint path="src/main/resources/Input" moveToPattern="#[java.util.UUID.randomUUID()]" responseTimeout="10000" doc:name="CIF_Input_File"/>
+        <byte-array-to-string-transformer doc:name="Byte Array to String"/>
+        <set-variable variableName="DescData" value="#[payload]" doc:name="Input String Payload"/>
+        <set-variable variableName="TimeStamp" value="#[function:datestamp:dd-MM-yy HH:mm:ss]" doc:name="TimeStamp"/>
+        <scatter-gather doc:name="Sending_Input_Data">
+            <db:insert config-ref="MySQL_Configuration" doc:name="Inserting_Total_Records">
+                <db:parameterized-query><![CDATA[insert into cif_nn values(#[message.id], 10,'true','text',#[flowVars.DescData],#[flowVars.TimeStamp],'successfully');]]></db:parameterized-query>
+            </db:insert>
+            <choice doc:name="FIle_Condition(T/F)">
+                <when expression="#[payload.contains(&quot;$$$&quot;)]">
+                    <file:outbound-endpoint path="src/main/resources/output" outputPattern=" #[server.dateTime.format(&quot;dd-MM-yyyy-hh-mm-ss&quot;)].txt" responseTimeout="10000" doc:name="Success_Data"/>
+                    <set-variable variableName="FileName" value=" #[message.inboundProperties.originalFilename]" doc:name="OriginalFileName"/>
+                    <set-variable variableName="FileID" value="#[message.id]" doc:name="FileID"/>
+                    <dw:transform-message doc:name="Status_XML_Format">
+                        <dw:set-payload><![CDATA[%dw 1.0
+%output application/xml
+---
+{
+	status:
+	{
+		FileID: (flowVars.FileID),
+		fileposted: "success",
+		filename: (flowVars.originalFilename)
+	}
+}]]></dw:set-payload>
+                    </dw:transform-message>
+                    <logger message="#[payload]" level="INFO" doc:name="Status_Payload"/>
+                    <mulexml:dom-to-xml-transformer doc:name="DOM to XML"/>
+                    <jms:outbound-endpoint queue="CIF" doc:name="Status"/>
+                </when>
+                <otherwise>
+                    <db:update config-ref="MySQL_Configuration" doc:name="Inserting_failure_Records">
+                        <db:parameterized-query><![CDATA[UPDATE cif_nn SET Status = 'false' WHERE UUID= #[message.id] ;]]></db:parameterized-query>
+                    </db:update>
+                    <logger message="'failed'" level="INFO" doc:name="Failed_Message"/>
+                </otherwise>
+            </choice>
+        </scatter-gather>
+	</flow>
+</mule>
